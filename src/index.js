@@ -5,7 +5,9 @@ const version = '15.1.0'; // trick libraries to think we are react
 
 const ELEMENTS = 'a abbr address area article aside audio b base bdi bdo big blockquote body br button canvas caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd keygen label legend li link main map mark menu menuitem meta meter nav noscript object ol optgroup option output p param picture pre progress q rp rt ruby s samp script section select small source span strong style sub summary sup table tbody td textarea tfoot th thead time title tr track u ul var video wbr circle clipPath defs ellipse g image line linearGradient mask path pattern polygon polyline radialGradient rect stop svg text tspan'.split(' ');
 
-const REACT_ELEMENT_TYPE = (typeof Symbol === 'function' && Symbol.for && Symbol.for('react.element')) || 0xeac7;
+const REACT_ELEMENT_TYPE = (typeof Symbol!=='undefined' && Symbol.for && Symbol.for('react.element')) || 0xeac7;
+
+const COMPONENT_WRAPPER_KEY = typeof Symbol!=='undefined' ? Symbol.for('__preactCompatWrapper') : '__preactCompatWrapper';
 
 // don't autobind these methods since they already have guaranteed context.
 const AUTOBIND_BLACKLIST = {
@@ -31,12 +33,12 @@ const BYPASS_HOOK = {};
 const DEV = typeof process==='undefined' || !process.env || process.env.NODE_ENV!=='production';
 
 // a component that renders nothing. Used to replace components for unmountComponentAtNode.
-const EmptyComponent = () => null;
+function EmptyComponent() { return null; }
 
 
 
 // make react think we're react.
-let VNode = h('').constructor;
+let VNode = h('a', null).constructor;
 VNode.prototype.$$typeof = REACT_ELEMENT_TYPE;
 VNode.prototype.preactCompatUpgraded = false;
 VNode.prototype.preactCompatNormalized = false;
@@ -57,8 +59,9 @@ Object.defineProperty(VNode.prototype, 'props', {
 
 let oldEventHook = options.event;
 options.event = e => {
-	e.persist = Object;
 	if (oldEventHook) e = oldEventHook(e);
+	e.persist = Object;
+	e.nativeEvent = e;
 	return e;
 };
 
@@ -75,21 +78,32 @@ options.vnode = vnode => {
 
 		if (typeof tag==='function') {
 			if (tag[COMPONENT_WRAPPER_KEY]===true || (tag.prototype && 'isReactComponent' in tag.prototype)) {
+				if (vnode.children && !vnode.children.length) vnode.children = undefined;
+				if (vnode.children) attrs.children = vnode.children;
+
 				if (!vnode.preactCompatNormalized) {
 					normalizeVNode(vnode);
 				}
 				handleComponentVNode(vnode);
 			}
 		}
-		else if (attrs) {
+		else {
+			if (vnode.children && !vnode.children.length) vnode.children = undefined;
+			if (vnode.children) attrs.children = vnode.children;
+
+			if (attrs.defaultValue) {
+				if (!attrs.value && attrs.value!==0) {
+					attrs.value = attrs.defaultValue;
+				}
+				delete attrs.defaultValue;
+			}
+
 			handleElementVNode(vnode, attrs);
 		}
 	}
+
 	if (oldVnodeHook) oldVnodeHook(vnode);
 };
-
-
-
 
 function handleComponentVNode(vnode) {
 	let tag = vnode.nodeName,
@@ -98,11 +112,6 @@ function handleComponentVNode(vnode) {
 	vnode.attributes = {};
 	if (tag.defaultProps) extend(vnode.attributes, tag.defaultProps);
 	if (a) extend(vnode.attributes, a);
-	a = vnode.attributes;
-
-	if (vnode.children && !vnode.children.length) vnode.children = undefined;
-
-	if (vnode.children) a.children = vnode.children;
 }
 
 function handleElementVNode(vnode, a) {
@@ -124,7 +133,7 @@ function handleElementVNode(vnode, a) {
 
 // proxy render() since React returns a Component reference.
 function render(vnode, parent, callback) {
-	let prev = parent && parent._preactCompatRendered;
+	let prev = parent && parent._preactCompatRendered && parent._preactCompatRendered.base;
 
 	// ignore impossible previous renders
 	if (prev && prev.parentNode!==parent) prev = null;
@@ -140,9 +149,9 @@ function render(vnode, parent, callback) {
 	}
 
 	let out = preactRender(vnode, parent, prev);
-	if (parent) parent._preactCompatRendered = out;
+	if (parent) parent._preactCompatRendered = out && (out._component || { base: out });
 	if (typeof callback==='function') callback();
-	return out && out._component || out.base;
+	return out && out._component || out;
 }
 
 
@@ -159,12 +168,12 @@ function renderSubtreeIntoContainer(parentComponent, vnode, container, callback)
 	let wrap = h(ContextProvider, { context: parentComponent.context }, vnode);
 	let c = render(wrap, container);
 	if (callback) callback(c);
-	return c;
+	return c._component || c.base;
 }
 
 
 function unmountComponentAtNode(container) {
-	let existing = container._preactCompatRendered;
+	let existing = container._preactCompatRendered && container._preactCompatRendered.base;
 	if (existing && existing.parentNode===container) {
 		preactRender(h(EmptyComponent), container, existing);
 		return true;
@@ -235,14 +244,12 @@ function isStatelessComponent(c) {
 }
 
 
-const COMPONENT_WRAPPER_KEY = typeof Symbol!=='undefined' ? Symbol.for('__preactCompatWrapper') : '__preactCompatWrapper';
-
 // wraps stateless functional components in a PropTypes validator
 function wrapStatelessComponent(WrappedComponent) {
 	return createClass({
 		displayName: WrappedComponent.displayName || WrappedComponent.name,
-		render(props, state, context) {
-			return WrappedComponent(props, context);
+		render() {
+			return WrappedComponent(this.props, this.context);
 		}
 	});
 }
@@ -300,7 +307,16 @@ function cloneElement(element, props, ...children) {
 		elementProps,
 		element.children || elementProps && elementProps.children
 	);
-	return normalizeVNode(preactCloneElement(node, props, ...children));
+	// Only provide the 3rd argument if needed.
+	// Arguments 3+ overwrite element.children in preactCloneElement
+	let cloneArgs = [node, props];
+	if (children && children.length) {
+		cloneArgs.push(children);
+	}
+	else if (props && props.children) {
+		cloneArgs.push(props.children);
+	}
+	return normalizeVNode(preactCloneElement(...cloneArgs));
 }
 
 
@@ -334,12 +350,11 @@ function applyEventNormalization({ nodeName, attributes }) {
 		attributes.ondblclick = attributes[props.ondoubleclick];
 		delete attributes[props.ondoubleclick];
 	}
-	if (props.onchange) {
-		nodeName = nodeName.toLowerCase();
-		let attr = nodeName==='input' && String(attributes.type).toLowerCase()==='checkbox' ? 'onclick' : 'oninput',
-			normalized = props[attr] || attr;
+	// for *textual inputs* (incl textarea), normalize `onChange` -> `onInput`:
+	if (props.onchange && (nodeName==='textarea' || (nodeName.toLowerCase()==='input' && !/^fil|che|rad/i.test(attributes.type)))) {
+		let normalized = props.oninput || 'oninput';
 		if (!attributes[normalized]) {
-			attributes[normalized] = multihook([attributes[props[attr]], attributes[props.onchange]]);
+			attributes[normalized] = multihook([attributes[normalized], attributes[props.onchange]]);
 			delete attributes[props.onchange];
 		}
 	}
@@ -370,7 +385,9 @@ function shallowDiffers(a, b) {
 }
 
 
-let findDOMNode = component => component && component.base || component;
+function findDOMNode(component) {
+	return component && component.base || component;
+}
 
 
 function F(){}
@@ -428,17 +445,10 @@ function collateMixins(mixins) {
 // apply a mapping of Arrays of mixin methods to a component prototype
 function applyMixins(proto, mixins) {
 	for (let key in mixins) if (mixins.hasOwnProperty(key)) {
-		const hooks = proto[key] ? mixins[key].concat(proto[key]) : mixins[key];
-		if (
-			key==="getDefaultProps" ||
-			key==="getInitialState" ||
-			key==="getChildContext"
-		) {
-			proto[key] = multihook(hooks, mergeNoDupes);
-		}
-		else {
-			proto[key] = multihook(hooks);
-		}
+		proto[key] = multihook(
+			mixins[key].concat(proto[key] || ARR),
+			key==='getDefaultProps' || key==='getInitialState' || key==='getChildContext'
+		);
 	}
 }
 
@@ -462,34 +472,22 @@ function callMethod(ctx, m, args) {
 	}
 }
 
-function multihook(hooks, mergeFn) {
+function multihook(hooks, skipDuplicates) {
 	return function() {
 		let ret;
 		for (let i=0; i<hooks.length; i++) {
 			let r = callMethod(this, hooks[i], arguments);
 
-			if (mergeFn) {
-				ret = mergeFn(ret, r);
+			if (skipDuplicates && r!=null) {
+				if (!ret) ret = {};
+				for (let key in r) if (r.hasOwnProperty(key)) {
+					ret[key] = r[key];
+				}
 			}
 			else if (typeof r!=='undefined') ret = r;
 		}
 		return ret;
 	};
-}
-
-
-// Used for lifecycle hooks like getInitialState to merge the return values
-function mergeNoDupes(previous, current) {
-	if (current!=null) {
-		if (typeof current!=='object') throw new Error('Expected return value to be an object or null.');
-		if (!previous) previous = {};
-
-		for (let key in current) if (current.hasOwnProperty(key)) {
-			if (previous.hasOwnProperty(key)) throw new Error('Duplicate key "' + key + '" found when merging return value.');
-			previous[key] = current[key];
-		}
-	}
-	return previous;
 }
 
 
@@ -547,15 +545,14 @@ function afterRender() {
 
 function Component(props, context, opts) {
 	PreactComponent.call(this, props, context);
-	if (this.getInitialState) this.state = this.getInitialState();
+	this.state = this.getInitialState ? this.getInitialState() : {};
 	this.refs = {};
 	this._refProxies = {};
 	if (opts!==BYPASS_HOOK) {
 		newComponentHook.call(this, props, context);
 	}
 }
-Component.prototype = new PreactComponent();
-extend(Component.prototype, {
+extend(Component.prototype = new PreactComponent(), {
 	constructor: Component,
 
 	isReactComponent: {},
@@ -583,7 +580,8 @@ extend(Component.prototype, {
 function PureComponent(props, context) {
 	Component.call(this, props, context);
 }
-PureComponent.prototype = new Component({}, {}, BYPASS_HOOK);
+F.prototype = Component.prototype;
+PureComponent.prototype = new F();
 PureComponent.prototype.shouldComponentUpdate = function(props, state) {
 	return shallowDiffers(this.props, props) || shallowDiffers(this.state, state);
 };
