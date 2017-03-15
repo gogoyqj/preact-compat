@@ -310,8 +310,10 @@ function isValidElement(element) {
 
 
 function createStringRefProxy(name, component) {
+	component.__refs[name] = '';
 	return component._refProxies[name] || (component._refProxies[name] = resolved => {
 		if (component && component.refs) {
+			if (resolved === null && (name in component.__refs)) return;
 			component.refs[name] = resolved;
 			if (resolved===null) {
 				delete component._refProxies[name];
@@ -532,6 +534,7 @@ function propsHook(props, context) {
 
 function beforeRender(props) {
 	currentComponent = this;
+	currentComponent.__refs = {};
 }
 
 function afterRender() {
